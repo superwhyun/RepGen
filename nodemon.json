@@ -1,0 +1,19 @@
+{
+  "watch": [
+    "app",
+    "components",
+    "lib",
+    "hooks",
+    "next.config.mjs",
+    "tsconfig.json"
+  ],
+  "ext": "ts,tsx,js,jsx,json,mjs",
+  "ignore": [
+    "node_modules",
+    ".next",
+    ".git",
+    "public"
+  ],
+  "exec": "next dev",
+  "delay": "1000"
+}
