@@ -100,6 +100,7 @@
 - [x] API 키 실시간 검증
 - [x] Toast 알림 추가
 - [x] GPT-4o 모델 적용
+- [x] GPT-5 Responses API로 마이그레이션
 - [x] Grok-4 모델 적용
 - [x] streamText API 사용
 - [x] nodemon 개발 환경 설정
@@ -114,7 +115,7 @@
 - ⏳ 루프 추출 및 AI 생성 개선 필요
 
 ### AI 모델
-- OpenAI: `gpt-4o`
+- OpenAI: `gpt-5` (Responses API 사용, reasoning effort: low)
 - xAI: `grok-4` (최신 reasoning 모델)
 
 ---

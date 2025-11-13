@@ -24,7 +24,7 @@ export function DataUpload({ placeholders, onDataUploaded, onContentGenerated }:
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([])
   const [isDragging, setIsDragging] = useState(false)
 
-  const extractTextFromDocx = async (file: File): Promise<string> => {
+  const extractTextFromFile = async (file: File): Promise<string> => {
     try {
       const arrayBuffer = await file.arrayBuffer()
       const response = await fetch("/api/extract-text", {
@@ -37,13 +37,13 @@ export function DataUpload({ placeholders, onDataUploaded, onContentGenerated }:
       })
 
       if (!response.ok) {
-        throw new Error("Failed to extract text from Word document")
+        throw new Error(`Failed to extract text from ${file.name}`)
       }
 
       const { text } = await response.json()
       return text
     } catch (error) {
-      console.error("[v0] Error extracting text from docx:", error)
+      console.error("[v0] Error extracting text from file:", error)
       throw error
     }
   }
@@ -57,9 +57,9 @@ export function DataUpload({ placeholders, onDataUploaded, onContentGenerated }:
         try {
           let content: string
           
-          // Word 파일인 경우 텍스트 추출
-          if (file.name.endsWith('.docx') || file.name.endsWith('.doc')) {
-            content = await extractTextFromDocx(file)
+          // Word 또는 PDF 파일인 경우 텍스트 추출
+          if (file.name.endsWith('.docx') || file.name.endsWith('.doc') || file.name.endsWith('.pdf')) {
+            content = await extractTextFromFile(file)
           } else {
             // 일반 텍스트 파일
             content = await file.text()
@@ -196,12 +196,12 @@ export function DataUpload({ placeholders, onDataUploaded, onContentGenerated }:
           </Button>
         </label>
         <p className="mt-3 text-sm text-muted-foreground">
-          지원 형식: .txt, .md, .doc, .docx (여러 파일 선택 가능)
+          지원 형식: .txt, .md, .doc, .docx, .pdf (여러 파일 선택 가능)
         </p>
         <input
           id="data-upload"
           type="file"
-          accept=".txt,.md,.doc,.docx"
+          accept=".txt,.md,.doc,.docx,.pdf"
           multiple
           className="hidden"
           onChange={handleFileChange}

@@ -5,7 +5,7 @@ Word 템플릿의 플레이스홀더를 AI가 자동으로 채워주는 Next.js 
 ## 🚀 주요 기능
 
 - **스마트 플레이스홀더**: `{{keyword}}` 또는 `{{keyword:작성지침}}` 형식 지원
-- **AI 자동 채우기**: OpenAI GPT-4o 또는 xAI Grok-4로 내용 자동 생성
+- **AI 자동 채우기**: OpenAI GPT-5 또는 xAI Grok-4-Fast로 내용 자동 생성
 - **다중 파일 업로드**: 여러 참고 문서를 한 번에 업로드 (Drag & Drop 지원)
 - **Word 파일 지원**: .docx 파일에서 텍스트 자동 추출
 - **실시간 편집**: AI가 생성한 내용을 바로 수정 가능
@@ -71,11 +71,12 @@ Word 문서에 플레이스홀더를 작성합니다:
 - 데이터 파일을 업로드 (여러 파일 선택 가능)
   - 텍스트 파일: .txt, .md
   - Word 문서: .docx, .doc
+  - PDF 문서: .pdf
 - 파일을 드래그 앤 드롭으로 추가
 - 업로드된 파일 목록 확인
 - **AI로 자동 채우기** 클릭
 
-> 💡 **Tip**: Word 파일을 업로드하면 자동으로 텍스트를 추출하여 AI에 전달합니다.
+> 💡 **Tip**: Word 및 PDF 파일을 업로드하면 자동으로 텍스트를 추출하여 AI에 전달합니다.
 
 #### Step 4: 내용 편집
 - AI가 자동으로 생성한 내용 확인
@@ -129,12 +130,79 @@ AI가 더 정확한 내용을 생성하도록 구체적인 지침을 제공하�
 {{budget:예산 개요}}
 ```
 
+### 표(Table) 만들기 - 중요! ⭐
+
+docxtemplater의 `paragraphLoop: true` 설정을 사용하면 **표의 행을 반복**할 수 있습니다.
+
+#### ✅ 올바른 방법 (행 전체 반복)
+
+Word에서 3행 표를 만들고:
+
+**1행 (헤더):**
+```
+| 이름 | 이메일 | 소속 |
+```
+
+**2행 (루프 시작 - 이 행 전체가 반복됨):**
+```
+| {{#employees:직원 정보 표를 만들어주세요}}{{name}} | {{email}} | {{dept}}{{/employees}} |
+```
+
+**핵심: 루프 시작과 종료 태그를 같은 행의 첫 번째 셀에 함께 넣습니다!**
+
+```
+첫 번째 셀: {{#employees:설명}}{{name}}{{/employees}}
+두 번째 셀: {{email}}
+세 번째 셀: {{dept}}
+```
+
+#### 또는 간단한 방법:
+
+**2행:**
+```
+| {{#employees}}{{name}}{{/employees}} | {{email}} | {{dept}} |
+```
+
+이렇게 하면 AI가 다음과 같은 데이터를 생성:
+```json
+{
+  "employees": [
+    {"name": "홍길동", "email": "hong@example.com", "dept": "개발팀"},
+    {"name": "김철수", "email": "kim@example.com", "dept": "영업팀"}
+  ]
+}
+```
+
+**결과:**
+```
+| 이름     | 이메일              | 소속     |
+|----------|---------------------|----------|
+| 홍길동   | hong@example.com    | 개발팀   |
+| 김철수   | kim@example.com     | 영업팀   |
+```
+
+#### ❌ 잘못된 방법 (작동하지 않음)
+
+```
+| {{#employees}} | 이메일 | 소속 |  ← 루프 시작이 혼자
+| {{name}}       | {{email}} | {{dept}} |
+| {{/employees}} | | |  ← 루프 종료가 다른 행
+```
+
+이렇게 하면 `[object Object],[object Object]` 오류 발생!
+
+**⚠️ 핵심 규칙:**
+- ✅ `{{#employees}}`와 `{{/employees}}`는 **같은 행**에 있어야 함
+- ✅ 보통 첫 번째 셀에 `{{#employees}}{{name}}{{/employees}}` 형식으로 작성
+- ✅ 나머지 셀에는 `{{email}}`, `{{dept}}` 등 일반 플레이스홀더만
+- ✅ `paragraphLoop: true`가 행 전체를 반복시킴
+
 ## 🛠️ 기술 스택
 
 - **Frontend**: Next.js 16, React 19, TypeScript
 - **Styling**: Tailwind CSS v4, shadcn/ui
-- **AI**: OpenAI SDK, xAI SDK
-- **문서 처리**: docxtemplater, pizzip
+- **AI**: OpenAI SDK (GPT-5), xAI SDK (Grok-4)
+- **문서 처리**: docxtemplater, pizzip, pdf-parse
 - **개발 도구**: nodemon, ESLint
 
 ## 📁 프로젝트 구조
@@ -163,12 +231,12 @@ RepGen/
 ### OpenAI API Key
 - 발급: https://platform.openai.com/api-keys
 - 형식: `sk-`로 시작
-- 모델: `gpt-4o`
+- 모델: `gpt-5` (Responses API 사용)
 
 ### Grok API Key
 - 발급: https://console.x.ai
 - 형식: `xai-`로 시작
-- 모델: `grok-4` (최신 reasoning 모델)
+- 모델: `grok-4-fast-non-reasoning` (빠른 non-reasoning 모델)
 
 > ⚠️ **보안**: API 키는 브라우저의 localStorage에 저장되며, 서버로 전송되지 않습니다.
 

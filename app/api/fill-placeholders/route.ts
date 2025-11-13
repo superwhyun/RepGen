@@ -1,7 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { streamText } from "ai"
-import { createOpenAI } from "@ai-sdk/openai"
+import OpenAI from "openai"
 import { createXai } from "@ai-sdk/xai"
+import { streamText } from "ai"
 
 export async function POST(req: NextRequest) {
   try {
@@ -20,29 +20,32 @@ export async function POST(req: NextRequest) {
     }
 
     let model
+    let useResponsesAPI = false
     if (provider === "openai") {
-      const openai = createOpenAI({ apiKey })
-      model = openai("gpt-4o")
+      // OpenAI GPT-5 - Responses API 사용
+      useResponsesAPI = true
+      model = new OpenAI({ apiKey })
     } else {
       const xai = createXai({ 
         apiKey,
-        timeout: 120000, // 2분 타임아웃 (reasoning 모델용)
+        timeout: 120000,
       })
-      // Grok 최신 모델: grok-4
-      model = xai("grok-4")
+      // Grok 빠른 non-reasoning 모델
+      model = xai("grok-4-fast-non-reasoning")
     }
 
-    // placeholders는 이제 {key, description} 객체 배열
-    type PlaceholderInput = { key: string; description?: string }
+    // placeholders는 이제 {key, description, isLoop} 객체 배열
+    type PlaceholderInput = { key: string; description?: string; isLoop?: boolean }
     const placeholderList = placeholders as PlaceholderInput[]
     
-    // description이 있는 경우 프롬프트에 반영
+    // description이 있는 경우 프롬프트에 반영, 루프 태그 표시
     const placeholderDescriptions = placeholderList
       .map((p) => {
+        const prefix = p.isLoop ? `- {{#${p.key}}} [TABLE/ARRAY]` : `- {{${p.key}}}`
         if (p.description) {
-          return `- {{${p.key}}} : ${p.description}`
+          return `${prefix} : ${p.description}`
         }
-        return `- {{${p.key}}}`
+        return prefix
       })
       .join("\n")
 
@@ -55,34 +58,50 @@ ${dataContent}
 
 Please analyze the data content and provide appropriate values for each placeholder. If a placeholder has a description (after the colon), follow those instructions carefully when generating the value. 
 
-IMPORTANT: Return ONLY a JSON object with placeholder names (WITHOUT curly braces) as keys and their values. Do not include {{}} in the keys. Do not include any other text or explanation.
+IMPORTANT: Return ONLY a JSON object with placeholder names (WITHOUT curly braces or # symbols) as keys and their values. 
 
-Example format:
+- For simple placeholders, provide STRING values
+- For table/array placeholders (descriptions mentioning "table", "list"), provide a MARKDOWN TABLE STRING
+- Do not include {{}} or {#} or {/} in the keys
+- Do not include any other text or explanation
+
+Example format for simple placeholders:
 {
   "name": "John Doe",
   "date": "2024-01-15",
   "company": "Acme Corp"
 }
 
-NOT like this (wrong):
-{
-  "{{name}}": "John Doe"
-}`
+Format for table placeholders - USE MARKDOWN TABLE:
+The markdown table will be inserted directly into the Word document.`
 
     console.log("[v0] 생성된 프롬프트:")
     console.log(prompt)
-    console.log("\n[v0] AI 모델:", provider === "openai" ? "gpt-4o" : "grok-4")
+    console.log("\n[v0] AI 모델:", provider === "openai" ? "gpt-5" : "grok-4-fast-non-reasoning")
 
-    const result = await streamText({
-      model,
-      prompt,
-      temperature: 0.7,
-    })
-
-    // Stream을 텍스트로 변환
     let fullText = ""
-    for await (const textPart of result.textStream) {
-      fullText += textPart
+    
+    if (useResponsesAPI) {
+      // OpenAI GPT-5 - Responses API 사용
+      const result = await (model as OpenAI).responses.create({
+        model: "gpt-5",
+        input: prompt,
+        reasoning: { effort: "low" },  // 빠른 응답, instruction following에 최적
+        text: { verbosity: "medium" }
+      })
+      fullText = result.output_text
+    } else {
+      // Grok - 기존 AI SDK 사용
+      const result = await streamText({
+        model: model as any,
+        prompt,
+        temperature: 0.7,
+      })
+      
+      // Stream을 텍스트로 변환
+      for await (const textPart of result.textStream) {
+        fullText += textPart
+      }
     }
 
     console.log("[v0] AI 응답:")
@@ -98,20 +117,24 @@ NOT like this (wrong):
     console.log("[v0] 파싱된 데이터:", filledData)
     
     // AI가 {{key}} 형식으로 반환했을 수 있으므로 정규화
-    const normalizedData: Record<string, string> = {}
+    const normalizedData: Record<string, any> = {}
     for (const [key, value] of Object.entries(filledData)) {
       // {{key}} -> key 형식으로 변환
       const normalizedKey = key.replace(/^\{\{|\}\}$/g, '')
-      normalizedData[normalizedKey] = value as string
+      normalizedData[normalizedKey] = value
     }
     
     console.log("[v0] 정규화된 데이터:", normalizedData)
     
-    const filledPlaceholders = placeholderList.map((p) => ({
-      key: p.key,
-      value: normalizedData[p.key] || "",
-      ...(p.description && { description: p.description }),
-    }))
+    const filledPlaceholders = placeholderList.map((p) => {
+      const value = normalizedData[p.key]
+      return {
+        key: p.key,
+        // 모든 값을 문자열로 (AI가 마크다운 표를 문자열로 반환함)
+        value: value?.toString() || "",
+        ...(p.description && { description: p.description }),
+      }
+    })
 
     console.log("[v0] 최종 결과:", JSON.stringify(filledPlaceholders, null, 2))
 

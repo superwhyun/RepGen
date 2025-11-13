@@ -12,7 +12,7 @@ import { ContentEditor } from "@/components/content-editor"
 
 export type Placeholder = {
   key: string
-  value: string
+  value: string | any[]  // 문자열 또는 배열 (테이블용)
   description?: string
 }
 
