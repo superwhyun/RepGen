@@ -37,13 +37,20 @@ export function DataUpload({ placeholders, onDataUploaded, onContentGenerated }:
       })
 
       if (!response.ok) {
-        throw new Error(`Failed to extract text from ${file.name}`)
+        const errorData = await response.json().catch(() => ({}))
+        const errorMessage = errorData.error || `파일에서 텍스트 추출 실패`
+        throw new Error(errorMessage)
       }
 
       const { text } = await response.json()
+      
+      if (!text || text.trim().length === 0) {
+        throw new Error("파일에서 추출된 텍스트가 없습니다")
+      }
+      
       return text
     } catch (error) {
-      console.error("[v0] Error extracting text from file:", error)
+      console.error("[v0] Error extracting text from file:", file.name, error)
       throw error
     }
   }
@@ -52,27 +59,59 @@ export function DataUpload({ placeholders, onDataUploaded, onContentGenerated }:
     async (files: FileList | File[]) => {
       const fileArray = Array.from(files)
       const newFiles: UploadedFile[] = []
+      const errors: string[] = []
 
       for (const file of fileArray) {
         try {
+          // 파일 크기 검증 (10MB 제한)
+          const maxSize = 10 * 1024 * 1024 // 10MB
+          if (file.size > maxSize) {
+            throw new Error(`파일 크기가 너무 큽니다 (최대 10MB)`)
+          }
+
           let content: string
+          const fileName = file.name.toLowerCase()
+          
+          // .doc 파일 지원 안내
+          if (fileName.endsWith('.doc') && !fileName.endsWith('.docx')) {
+            throw new Error('.doc 형식은 지원하지 않습니다. .docx 형식으로 변환해주세요.')
+          }
           
           // Word 또는 PDF 파일인 경우 텍스트 추출
-          if (file.name.endsWith('.docx') || file.name.endsWith('.doc') || file.name.endsWith('.pdf')) {
+          if (fileName.endsWith('.docx') || fileName.endsWith('.pdf')) {
             content = await extractTextFromFile(file)
-          } else {
+          } else if (fileName.endsWith('.txt') || fileName.endsWith('.md')) {
             // 일반 텍스트 파일
             content = await file.text()
+            if (!content || content.trim().length === 0) {
+              throw new Error("파일 내용이 비어있습니다")
+            }
+          } else {
+            throw new Error("지원하지 않는 파일 형식입니다 (.txt, .md, .docx, .pdf만 지원)")
           }
           
           newFiles.push({ file, content })
         } catch (error) {
           console.error("[v0] Error reading file:", file.name, error)
-          alert(`파일 읽기 실패: ${file.name}`)
+          const errorMessage = error instanceof Error ? error.message : "알 수 없는 오류"
+          errors.push(`${file.name}: ${errorMessage}`)
         }
       }
 
-      setUploadedFiles((prev) => [...prev, ...newFiles])
+      // 업로드 성공한 파일 추가
+      if (newFiles.length > 0) {
+        setUploadedFiles((prev) => [...prev, ...newFiles])
+      }
+
+      // 에러가 있으면 사용자에게 알림
+      if (errors.length > 0) {
+        alert(`파일 처리 중 오류가 발생했습니다:\n\n${errors.join('\n')}`)
+      }
+
+      // 성공한 파일이 있으면 성공 메시지
+      if (newFiles.length > 0 && errors.length > 0) {
+        alert(`${newFiles.length}개 파일은 성공적으로 업로드되었습니다.`)
+      }
     },
     [],
   )
@@ -196,12 +235,12 @@ export function DataUpload({ placeholders, onDataUploaded, onContentGenerated }:
           </Button>
         </label>
         <p className="mt-3 text-sm text-muted-foreground">
-          지원 형식: .txt, .md, .doc, .docx, .pdf (여러 파일 선택 가능)
+          지원 형식: .txt, .md, .docx, .pdf (최대 10MB, 여러 파일 선택 가능)
         </p>
         <input
           id="data-upload"
           type="file"
-          accept=".txt,.md,.doc,.docx,.pdf"
+          accept=".txt,.md,.docx,.pdf"
           multiple
           className="hidden"
           onChange={handleFileChange}
