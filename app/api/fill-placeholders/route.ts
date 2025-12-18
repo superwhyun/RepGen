@@ -26,7 +26,7 @@ export async function POST(req: NextRequest) {
       useResponsesAPI = true
       model = new OpenAI({ apiKey })
     } else {
-      const xai = createXai({ 
+      const xai = createXai({
         apiKey,
         timeout: 120000,
       })
@@ -37,7 +37,7 @@ export async function POST(req: NextRequest) {
     // placeholders는 이제 {key, description, isLoop} 객체 배열
     type PlaceholderInput = { key: string; description?: string; isLoop?: boolean }
     const placeholderList = placeholders as PlaceholderInput[]
-    
+
     // description이 있는 경우 프롬프트에 반영, 루프 태그 표시
     const placeholderDescriptions = placeholderList
       .map((p) => {
@@ -77,10 +77,10 @@ The markdown table will be inserted directly into the Word document.`
 
     console.log("[v0] 생성된 프롬프트:")
     console.log(prompt)
-    console.log("\n[v0] AI 모델:", provider === "openai" ? "gpt-5" : "grok-4-fast-non-reasoning")
+    console.log("\n[v0] AI 모델:", provider === "openai" ? "gpt-5.2" : "grok-4-fast-non-reasoning")
 
     let fullText = ""
-    
+
     if (useResponsesAPI) {
       // OpenAI GPT-5 - Responses API 사용
       const result = await (model as OpenAI).responses.create({
@@ -97,7 +97,7 @@ The markdown table will be inserted directly into the Word document.`
         prompt,
         temperature: 0.7,
       })
-      
+
       // Stream을 텍스트로 변환
       for await (const textPart of result.textStream) {
         fullText += textPart
@@ -115,7 +115,7 @@ The markdown table will be inserted directly into the Word document.`
 
     const filledData = JSON.parse(jsonMatch[0])
     console.log("[v0] 파싱된 데이터:", filledData)
-    
+
     // AI가 {{key}} 형식으로 반환했을 수 있으므로 정규화
     const normalizedData: Record<string, any> = {}
     for (const [key, value] of Object.entries(filledData)) {
@@ -123,9 +123,9 @@ The markdown table will be inserted directly into the Word document.`
       const normalizedKey = key.replace(/^\{\{|\}\}$/g, '')
       normalizedData[normalizedKey] = value
     }
-    
+
     console.log("[v0] 정규화된 데이터:", normalizedData)
-    
+
     const filledPlaceholders = placeholderList.map((p) => {
       const value = normalizedData[p.key]
       return {
@@ -141,7 +141,7 @@ The markdown table will be inserted directly into the Word document.`
     return NextResponse.json({ filledPlaceholders })
   } catch (error: any) {
     console.error("[v0] Error filling placeholders:", error)
-    
+
     // API 키 오류 체크
     if (error?.responseBody?.includes('Incorrect API key') || error?.responseBody?.includes('invalid_api_key')) {
       return NextResponse.json(
@@ -149,7 +149,7 @@ The markdown table will be inserted directly into the Word document.`
         { status: 401 },
       )
     }
-    
+
     // 일반 에러 메시지
     let errorMessage = "Failed to fill placeholders"
     if (error instanceof Error) {
@@ -162,7 +162,7 @@ The markdown table will be inserted directly into the Word document.`
         errorMessage = error.responseBody
       }
     }
-    
+
     return NextResponse.json(
       { error: errorMessage },
       { status: error?.statusCode || 500 },
