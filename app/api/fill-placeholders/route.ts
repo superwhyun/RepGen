@@ -84,7 +84,7 @@ The markdown table will be inserted directly into the Word document.`
     if (useResponsesAPI) {
       // OpenAI GPT-5 - Responses API 사용
       const result = await (model as OpenAI).responses.create({
-        model: "gpt-5",
+        model: "gpt-5.2",
         input: prompt,
         reasoning: { effort: "low" },  // 빠른 응답, instruction following에 최적
         text: { verbosity: "medium" }
