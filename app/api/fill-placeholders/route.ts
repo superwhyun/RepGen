@@ -7,11 +7,6 @@ export async function POST(req: NextRequest) {
   try {
     const { dataContent, placeholders, provider, apiKey } = await req.json()
 
-    console.log("[v0] 받은 데이터:")
-    console.log("- dataContent 길이:", dataContent?.length || 0)
-    console.log("- placeholders:", JSON.stringify(placeholders, null, 2))
-    console.log("- provider:", provider)
-
     if (!apiKey) {
       return NextResponse.json(
         { error: `Please configure your ${provider === "openai" ? "OpenAI" : "Grok"} API key in settings` },
@@ -34,50 +29,48 @@ export async function POST(req: NextRequest) {
       model = xai("grok-4-fast-non-reasoning")
     }
 
-    // placeholders는 이제 {key, description, isLoop} 객체 배열
-    type PlaceholderInput = { key: string; description?: string; isLoop?: boolean }
+    // placeholders는 이제 {key, description, isLoop, fields} 객체 배열
+    type PlaceholderInput = { key: string; description?: string; isLoop?: boolean; fields?: string[] }
     const placeholderList = placeholders as PlaceholderInput[]
 
-    // description이 있는 경우 프롬프트에 반영, 루프 태그 표시
+    // description이 있는 경우 프롬프트에 반영, 루프 태그 및 필드 정보 표시
     const placeholderDescriptions = placeholderList
       .map((p) => {
-        const prefix = p.isLoop ? `- {{#${p.key}}} [TABLE/ARRAY]` : `- {{${p.key}}}`
-        if (p.description) {
-          return `${prefix} : ${p.description}`
+        if (p.isLoop) {
+          const fieldsStr = p.fields && p.fields.length > 0 ? ` (Fields: ${p.fields.join(', ')})` : ''
+          const prefix = `- {{#${p.key}}} [ARRAY/LIST]${fieldsStr}`
+          return p.description ? `${prefix} : ${p.description}` : prefix
         }
-        return prefix
+
+        const prefix = `- {{${p.key}}}`
+        return p.description ? `${prefix} : ${p.description}` : prefix
       })
       .join("\n")
 
     const prompt = `You are a document filling assistant. I have a document with the following placeholders that need to be filled:
-
-${placeholderDescriptions}
-
-Here is the data content:
-${dataContent}
-
-Please analyze the data content and provide appropriate values for each placeholder. If a placeholder has a description (after the colon), follow those instructions carefully when generating the value. 
-
-IMPORTANT: Return ONLY a JSON object with placeholder names (WITHOUT curly braces or # symbols) as keys and their values. 
-
-- For simple placeholders, provide STRING values
-- For table/array placeholders (descriptions mentioning "table", "list"), provide a MARKDOWN TABLE STRING
-- Do not include {{}} or {#} or {/} in the keys
-- Do not include any other text or explanation
-
-Example format for simple placeholders:
-{
-  "name": "John Doe",
-  "date": "2024-01-15",
-  "company": "Acme Corp"
-}
-
-Format for table placeholders - USE MARKDOWN TABLE:
-The markdown table will be inserted directly into the Word document.`
-
-    console.log("[v0] 생성된 프롬프트:")
-    console.log(prompt)
-    console.log("\n[v0] AI 모델:", provider === "openai" ? "gpt-5.2" : "grok-4-fast-non-reasoning")
+ 
+ ${placeholderDescriptions}
+ 
+ Here is the data content:
+ ${dataContent}
+ 
+ Please analyze the data content and provide appropriate values for each placeholder. If a placeholder has a description (after the colon), follow those instructions carefully when generating the value. 
+ 
+ IMPORTANT: Return ONLY a JSON object with placeholder names as keys and their values. 
+ 
+ - For normal placeholders, provide STRING values.
+ - For [ARRAY/LIST] placeholders, provide a JSON ARRAY of objects. Each object should contain the requested "Fields" if they were specified.
+ - If no specific fields were specified for an array, create appropriate field names based on the data.
+ - Do not include any other text or explanation.
+ 
+ Example format:
+ {
+   "company": "Acme Corp",
+   "tasks": [
+     { "no": "1", "name": "Design", "owner": "John" },
+     { "no": "2", "name": "Build", "owner": "Sarah" }
+   ]
+ }`
 
     let fullText = ""
 
@@ -104,23 +97,18 @@ The markdown table will be inserted directly into the Word document.`
       }
     }
 
-    console.log("[v0] AI 응답:")
-    console.log(fullText)
-
     const jsonMatch = fullText.match(/\{[\s\S]*\}/)
     if (!jsonMatch) {
-      console.error("[v0] JSON 파싱 실패 - AI 응답:", fullText)
       throw new Error("Failed to parse AI response")
     }
 
     const filledData = JSON.parse(jsonMatch[0])
-    console.log("[v0] 파싱된 데이터:", filledData)
 
     // AI가 {{key}} 형식으로 반환했을 수 있으므로 정규화
     const normalizedData: Record<string, any> = {}
     for (const [key, value] of Object.entries(filledData)) {
       // {{key}} -> key 형식으로 변환
-      const normalizedKey = key.replace(/^\{\{|\}\}$/g, '')
+      const normalizedKey = key.replace(/^\{\{|\}\}$|^\#|\/$/g, '')
       normalizedData[normalizedKey] = value
     }
 
@@ -130,18 +118,14 @@ The markdown table will be inserted directly into the Word document.`
       const value = normalizedData[p.key]
       return {
         key: p.key,
-        // 모든 값을 문자열로 (AI가 마크다운 표를 문자열로 반환함)
-        value: value?.toString() || "",
+        value: value || (p.isLoop ? [] : ""),
         ...(p.description && { description: p.description }),
+        ...(p.isLoop && { isLoop: true, fields: p.fields })
       }
     })
 
-    console.log("[v0] 최종 결과:", JSON.stringify(filledPlaceholders, null, 2))
-
     return NextResponse.json({ filledPlaceholders })
   } catch (error: any) {
-    console.error("[v0] Error filling placeholders:", error)
-
     // API 키 오류 체크
     if (error?.responseBody?.includes('Incorrect API key') || error?.responseBody?.includes('invalid_api_key')) {
       return NextResponse.json(

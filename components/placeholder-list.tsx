@@ -1,9 +1,8 @@
 "use client"
 
-import { FileText, ChevronRight, AlertCircle } from "lucide-react"
+import { FileText, ChevronRight } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import type { Placeholder } from "@/app/page"
 
 type Props = {
@@ -12,8 +11,6 @@ type Props = {
 }
 
 export function PlaceholderList({ placeholders, onContinue }: Props) {
-  const hasLoopPlaceholders = placeholders.some((p: any) => p.isLoop)
-  
   return (
     <div className="py-6">
       <div className="mb-6">
@@ -22,65 +19,40 @@ export function PlaceholderList({ placeholders, onContinue }: Props) {
           Found {placeholders.length} placeholder{placeholders.length !== 1 ? "s" : ""} in your template
         </p>
       </div>
-      
-      {hasLoopPlaceholders && (
-        <Alert className="mb-6">
-          <AlertCircle className="h-4 w-4" />
-          <AlertTitle>표(Table) 작성 안내</AlertTitle>
-          <AlertDescription>
-            <p className="mb-2">루프 플레이스홀더가 감지되었습니다. Word 표를 올바르게 작성하세요:</p>
-            <div className="mt-2 rounded bg-muted p-3 font-mono text-xs">
-              <div>✅ 올바른 방법:</div>
-              <div className="mt-1 text-green-600 dark:text-green-400">
-                첫 번째 셀: {`{{#arrayName}}{{field1}}{{/arrayName}}`}
-              </div>
-              <div className="text-green-600 dark:text-green-400">
-                두 번째 셀: {`{{field2}}`}
-              </div>
-              <div className="mt-2">❌ 잘못된 방법 (이렇게 하면 [object Object] 오류!):</div>
-              <div className="text-red-600 dark:text-red-400">
-                행1: {`{{#arrayName}}`} (다른 행에 있으면 안됨!)
-              </div>
-              <div className="text-red-600 dark:text-red-400">
-                행2: {`{{field1}} | {{field2}}`}
-              </div>
-              <div className="text-red-600 dark:text-red-400">
-                행3: {`{{/arrayName}}`}
-              </div>
-            </div>
-            <p className="mt-2 text-xs text-muted-foreground">
-              ⚠️ 루프 시작과 종료 태그는 반드시 같은 행에 있어야 합니다.
-            </p>
-          </AlertDescription>
-        </Alert>
-      )}
 
       <div className="mb-6 space-y-3">
         {placeholders.map((placeholder, index) => {
           const isLoop = (placeholder as any).isLoop
           return (
-            <div key={index} className="rounded-lg border border-border bg-card p-4">
-              <div className="flex items-start gap-3">
+            <div key={index} className="rounded-xl border border-border bg-card p-4 transition-all hover:shadow-sm">
+              <div className="flex items-start gap-4">
                 <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10">
                   <FileText className="h-5 w-5 text-primary" />
                 </div>
                 <div className="flex-1 overflow-hidden">
-                  <div className="flex items-center gap-2">
-                    <Badge variant="secondary" className="font-mono text-xs">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant="secondary" className="font-mono text-sm px-2">
                       {"{"}
-                      {isLoop ? "#" : "{"}
+                      {isLoop ? "" : "{"}
                       {placeholder.key}
+                      {isLoop ? ".*" : "}"}
                       {"}"}
-                      {isLoop ? "" : "}"}
                     </Badge>
                     {isLoop && (
-                      <Badge variant="outline" className="text-xs text-blue-600 dark:text-blue-400">
-                        TABLE/ARRAY
-                      </Badge>
+                      <div className="flex flex-wrap gap-1">
+                        <Badge variant="outline" className="text-xs bg-blue-50 text-blue-600 border-blue-200 dark:bg-blue-900/20 dark:text-blue-400 dark:border-blue-800">
+                          TABLE/ARRAY
+                        </Badge>
+                        {(placeholder as any).fields?.map((f: string) => (
+                          <Badge key={f} variant="secondary" className="px-1 py-0 text-[10px] font-normal opacity-80 bg-muted/50">
+                            .{f}
+                          </Badge>
+                        ))}
+                      </div>
                     )}
                   </div>
                   {placeholder.description && (
-                    <p className="mt-2 text-sm text-muted-foreground">
+                    <p className="mt-2 text-sm text-muted-foreground leading-relaxed">
                       {placeholder.description}
                     </p>
                   )}

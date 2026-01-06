@@ -36,7 +36,6 @@ export function TemplateUpload({ onTemplateUploaded }: Props) {
 
         if (!response.ok) {
           const errorMsg = data.error || "템플릿 파일 처리 실패"
-          console.error("[v0] Error processing template:", data)
           alert(`템플릿 처리 중 오류가 발생했습니다:\n\n${errorMsg}\n\n문서에 중복된 {{{{ 또는 잘못된 플레이스홀더 형식이 있는지 확인해주세요.`)
           return
         }
@@ -44,7 +43,6 @@ export function TemplateUpload({ onTemplateUploaded }: Props) {
         const { placeholders } = data
         onTemplateUploaded(file, arrayBuffer, placeholders)
       } catch (error) {
-        console.error("[v0] Error processing template:", error)
         alert("템플릿 파일 처리 중 오류가 발생했습니다. 파일 형식을 확인해주세요.")
       }
     },

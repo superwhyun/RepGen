@@ -26,31 +26,47 @@ export function DataUpload({ placeholders, onDataUploaded, onContentGenerated }:
 
   const extractTextFromFile = async (file: File): Promise<string> => {
     try {
-      const arrayBuffer = await file.arrayBuffer()
-      const response = await fetch("/api/extract-text", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          content: Array.from(new Uint8Array(arrayBuffer)),
-          filename: file.name,
-        }),
-      })
+      const fileName = file.name.toLowerCase()
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}))
-        const errorMessage = errorData.error || `파일에서 텍스트 추출 실패`
-        throw new Error(errorMessage)
+      // Word 파일(.docx) 브라우저에서 직접 텍스트 추출
+      if (fileName.endsWith('.docx')) {
+        const PizZip = (await import("pizzip")).default
+        const Docxtemplater = (await import("docxtemplater")).default
+        const arrayBuffer = await file.arrayBuffer()
+        const zip = new PizZip(arrayBuffer)
+        const doc = new Docxtemplater(zip)
+        return doc.getFullText()
       }
 
-      const { text } = await response.json()
-      
-      if (!text || text.trim().length === 0) {
-        throw new Error("파일에서 추출된 텍스트가 없습니다")
+      // PDF 파일 브라우저에서 직접 텍스트 추출 (pdfjs-dist 활용)
+      if (fileName.endsWith('.pdf')) {
+        const pdfjs = await import('pdfjs-dist')
+        // 워커 설정 - npm 패키지에서 제공하는 워커 파일 사용
+        pdfjs.GlobalWorkerOptions.workerSrc = `//cdn.jsdelivr.net/npm/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`
+
+        const arrayBuffer = await file.arrayBuffer()
+        const loadingTask = pdfjs.getDocument({ data: arrayBuffer })
+        const pdf = await loadingTask.promise
+
+        let fullText = ""
+        for (let i = 1; i <= pdf.numPages; i++) {
+          const page = await pdf.getPage(i)
+          const content = await page.getTextContent()
+          const strings = content.items.map((item: any) => item.str)
+          fullText += strings.join(" ") + "\n"
+        }
+
+        if (!fullText.trim()) throw new Error("PDF에서 텍스트를 추출할 수 없습니다")
+        return fullText
       }
-      
-      return text
+
+      // 텍스트 계열 파일
+      if (fileName.endsWith('.txt') || fileName.endsWith('.md')) {
+        return await file.text()
+      }
+
+      throw new Error("지원하지 않는 파일 형식입니다 (.docx, .pdf, .txt, .md)")
     } catch (error) {
-      console.error("[v0] Error extracting text from file:", file.name, error)
       throw error
     }
   }
@@ -71,12 +87,12 @@ export function DataUpload({ placeholders, onDataUploaded, onContentGenerated }:
 
           let content: string
           const fileName = file.name.toLowerCase()
-          
+
           // .doc 파일 지원 안내
           if (fileName.endsWith('.doc') && !fileName.endsWith('.docx')) {
             throw new Error('.doc 형식은 지원하지 않습니다. .docx 형식으로 변환해주세요.')
           }
-          
+
           // Word 또는 PDF 파일인 경우 텍스트 추출
           if (fileName.endsWith('.docx') || fileName.endsWith('.pdf')) {
             content = await extractTextFromFile(file)
@@ -89,10 +105,9 @@ export function DataUpload({ placeholders, onDataUploaded, onContentGenerated }:
           } else {
             throw new Error("지원하지 않는 파일 형식입니다 (.txt, .md, .docx, .pdf만 지원)")
           }
-          
+
           newFiles.push({ file, content })
         } catch (error) {
-          console.error("[v0] Error reading file:", file.name, error)
           const errorMessage = error instanceof Error ? error.message : "알 수 없는 오류"
           errors.push(`${file.name}: ${errorMessage}`)
         }
@@ -194,7 +209,6 @@ export function DataUpload({ placeholders, onDataUploaded, onContentGenerated }:
       const { filledPlaceholders } = await response.json()
       onContentGenerated(filledPlaceholders)
     } catch (error) {
-      console.error("[v0] Error processing data:", error)
       alert(error instanceof Error ? error.message : "Error processing data file")
     } finally {
       setIsProcessing(false)
@@ -212,9 +226,8 @@ export function DataUpload({ placeholders, onDataUploaded, onContentGenerated }:
 
       {/* Drag & Drop Area */}
       <div
-        className={`mb-6 flex flex-col items-center justify-center rounded-lg border-2 border-dashed py-12 transition-colors ${
-          isDragging ? "border-primary bg-primary/5" : "border-border"
-        }`}
+        className={`mb-6 flex flex-col items-center justify-center rounded-lg border-2 border-dashed py-12 transition-colors ${isDragging ? "border-primary bg-primary/5" : "border-border"
+          }`}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}

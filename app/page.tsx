@@ -14,6 +14,8 @@ export type Placeholder = {
   key: string
   value: string | any[]  // 문자열 또는 배열 (테이블용)
   description?: string
+  isLoop?: boolean
+  fields?: string[]
 }
 
 export type AIProvider = "openai" | "grok"
@@ -26,10 +28,17 @@ export default function Home() {
   const [isProcessing, setIsProcessing] = useState(false)
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null)
 
-  const handleTemplateUploaded = (file: File, content: ArrayBuffer, extractedPlaceholders: Placeholder[]) => {
+  const handleTemplateUploaded = (file: File, content: ArrayBuffer, extractedPlaceholders: any[]) => {
     setTemplateFile(file)
     setTemplateContent(content)
-    setPlaceholders(extractedPlaceholders.map((p) => ({ ...p, value: "" })))
+    // 루프인 경우 초기값을 빈 배열로, 일반인 경우 빈 문자열로 설정
+    // isLoop와 fields 속성 유지
+    setPlaceholders(extractedPlaceholders.map((p) => ({
+      key: p.key,
+      value: p.isLoop ? [] : "",
+      ...(p.description && { description: p.description }),
+      ...(p.isLoop && { isLoop: true, fields: p.fields })
+    })))
     setStep("placeholders")
   }
 
@@ -45,24 +54,110 @@ export default function Home() {
   const handleEditComplete = async () => {
     setIsProcessing(true)
     try {
-      const response = await fetch("/api/generate-document", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          templateContent: Array.from(new Uint8Array(templateContent!)),
-          placeholders: placeholders.reduce((acc, p) => ({ ...acc, [p.key]: p.value }), {}),
-        }),
+      const PizZip = (await import("pizzip")).default
+      const Docxtemplater = (await import("docxtemplater")).default
+
+      const zip = new PizZip(templateContent!)
+
+      // 템플릿 자동 변환: {{task.name}} -> {{#task}}{{name}}{{/task}}
+      try {
+        const docXmlPath = "word/document.xml"
+        const file = zip.file(docXmlPath)
+        if (file) {
+          let docXml = file.asText()
+
+          // 표의 각 행에서 parent.child 패턴을 루프로 변환
+          const trRegex = /<w:tr\b[^>]*>([\s\S]*?)<\/w:tr>/g
+          docXml = docXml.replace(trRegex, (fullMatch) => {
+            const plainText = fullMatch.replace(/<[^>]+>/g, '')
+            const dotMatch = plainText.match(/\{\{([a-zA-Z0-9_]+)\./)
+
+            if (!dotMatch) return fullMatch
+
+            const parentName = dotMatch[1]
+
+            // parent. 제거
+            let converted = fullMatch.replace(new RegExp(`\\{\\{${parentName}\\.`, 'g'), '{{')
+
+            // 행 시작에 {{#parent}} 추가
+            const firstTextMatch = converted.match(/<w:t[^>]*>/)
+            if (firstTextMatch?.index !== undefined) {
+              const pos = firstTextMatch.index + firstTextMatch[0].length
+              converted = converted.slice(0, pos) + `{{#${parentName}}}` + converted.slice(pos)
+            }
+
+            // 행 끝에 {{/parent}} 추가
+            const lastCloseIndex = converted.lastIndexOf('</w:t>')
+            if (lastCloseIndex !== -1) {
+              converted = converted.slice(0, lastCloseIndex) + `{{/${parentName}}}` + converted.slice(lastCloseIndex)
+            }
+
+            return converted
+          })
+
+          zip.file(docXmlPath, docXml)
+        }
+      } catch (convError) {
+        // Auto-conversion failed, proceed with normal rendering
+      }
+
+      // 데이터 준비
+      const data = placeholders.reduce((acc, p) => ({ ...acc, [p.key]: p.value }), {})
+
+      // --- Parser & Options ---
+      const angularParser = (tag: string) => {
+        // 1. 점 기호(.)나 쉼표(:) 앞에 오는 루프 기호(#, /) 제거
+        // {{#task.name}} -> task.name, {{/task}} -> task
+        let expression = tag.replace(/^[#\/]/, "")
+
+        // 2. 지침(description) 제거: {{keyword:description}} -> keyword
+        expression = expression.includes(':') ? expression.split(':')[0].trim() : expression.trim()
+
+        if (expression === '') {
+          return { get: (s: any) => s }
+        }
+
+        return {
+          get: (scope: any) => {
+            let obj: any = scope
+            const parts = expression.split('.')
+            for (let i = 0; i < parts.length; i++) {
+              if (obj === undefined || obj === null) return undefined
+              obj = obj[parts[i]]
+            }
+            return obj
+          }
+        }
+      }
+
+      const doc = new Docxtemplater(zip, {
+        paragraphLoop: true,
+        linebreaks: true,
+        delimiters: {
+          start: '{{',
+          end: '}}'
+        },
+        parser: angularParser,
+        nullGetter: () => "" // 값이 없는 경우 undefined 대신 빈 문자열 출력
       })
 
-      if (!response.ok) throw new Error("Failed to generate document")
+      try {
+        doc.render(data)
+      } catch (renderError: any) {
+        throw renderError
+      }
 
-      const blob = await response.blob()
-      const url = URL.createObjectURL(blob)
+      const output = doc.getZip().generate({
+        type: "blob",
+        mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      })
+
+      const url = URL.createObjectURL(output)
       setDownloadUrl(url)
       setStep("download")
-    } catch (error) {
-      console.error("[v0] Error generating document:", error)
-      alert("문서 생성 중 오류가 발생했습니다.")
+    } catch (error: any) {
+      const errorMsg = error.properties?.explanation || error.message || "문서 생성 중 알 수 없는 오류가 발생했습니다."
+      alert(`오류: ${errorMsg}`)
     } finally {
       setIsProcessing(false)
     }
@@ -116,20 +211,18 @@ export default function Home() {
                 <div key={s.id} className="flex flex-1 items-center">
                   <div className="flex flex-col items-center">
                     <div
-                      className={`flex h-10 w-10 items-center justify-center rounded-full border-2 transition-colors ${
-                        isActive
-                          ? "border-primary bg-primary text-primary-foreground"
-                          : isCompleted
-                            ? "border-primary bg-primary/10 text-primary"
-                            : "border-muted bg-background text-muted-foreground"
-                      }`}
+                      className={`flex h-10 w-10 items-center justify-center rounded-full border-2 transition-colors ${isActive
+                        ? "border-primary bg-primary text-primary-foreground"
+                        : isCompleted
+                          ? "border-primary bg-primary/10 text-primary"
+                          : "border-muted bg-background text-muted-foreground"
+                        }`}
                     >
                       <Icon className="h-4 w-4" />
                     </div>
                     <span
-                      className={`mt-2 text-xs font-medium ${
-                        isActive || isCompleted ? "text-foreground" : "text-muted-foreground"
-                      }`}
+                      className={`mt-2 text-xs font-medium ${isActive || isCompleted ? "text-foreground" : "text-muted-foreground"
+                        }`}
                     >
                       {s.label}
                     </span>
