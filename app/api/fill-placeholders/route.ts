@@ -79,8 +79,9 @@ export async function POST(req: NextRequest) {
       const result = await (model as OpenAI).responses.create({
         model: "gpt-5.2",
         input: prompt,
-        reasoning: { effort: "low" },  // 빠른 응답, instruction following에 최적
-        text: { verbosity: "medium" }
+        reasoning: { effort: "medium" },  // 문서 분석 및 요약에 적합한 추론 수준
+        // 긴 문서 및 많은 placeholder 처리를 위한 충분한 출력 토큰 (최대 16K)
+        max_output_tokens: 16000
       })
       fullText = result.output_text
     } else {
