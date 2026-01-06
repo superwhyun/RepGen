@@ -23,53 +23,8 @@ export async function POST(req: NextRequest) {
       }, { status: 400 })
     }
 
-    // PDF 파일 처리
-    if (filenameLower.endsWith('.pdf')) {
-      try {
-        // --- Polyfills for pdf-parse (pdfjs-dist) in Node.js environment ---
-        if (typeof (global as any).DOMMatrix === 'undefined') {
-          (global as any).DOMMatrix = class DOMMatrix {
-            constructor() { }
-            static fromMatrix() { return new DOMMatrix(); }
-          };
-        }
-        // ------------------------------------------------------------------
-
-        // ESM/Next.js 환경에서 pdf-parse 함수를 확실하게 가져오기 위한 방법
-        const { createRequire } = await import('module')
-        const require = createRequire(import.meta.url)
-        let pdfParse: any
-
-        try {
-          // 1. 내부 lib 경로로 직접 접근 (가장 확실한 방법)
-          pdfParse = require('pdf-parse/lib/pdf-parse.js')
-        } catch (e) {
-          // 2. 일반적인 로드 시도
-          const mod = require('pdf-parse')
-          pdfParse = typeof mod === 'function' ? mod : (mod.default || mod)
-        }
-
-        if (typeof pdfParse !== 'function') {
-          throw new Error('PDF parsing library could not be loaded as a function')
-        }
-
-        const data = await pdfParse(buffer)
-
-        text = data.text
-
-        if (!text || text.trim().length === 0) {
-          return NextResponse.json({
-            error: "PDF에서 텍스트를 추출할 수 없습니다. 스캔된 이미지 PDF이거나 보호된 파일일 수 있습니다."
-          }, { status: 400 })
-        }
-      } catch (pdfError: any) {
-        return NextResponse.json({
-          error: `PDF 파일 처리 중 오류가 발생했습니다: ${pdfError.message}`
-        }, { status: 500 })
-      }
-    }
     // Word 파일 처리 (.docx만 지원)
-    else if (filenameLower.endsWith('.docx')) {
+    if (filenameLower.endsWith('.docx')) {
       try {
         const zip = new PizZip(buffer)
         const doc = new Docxtemplater(zip, {
