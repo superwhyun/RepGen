@@ -13,6 +13,34 @@ type FileSearchEvidence = {
   text: string
 }
 
+type DeleteRetryResult = {
+  ok: boolean
+  attempts: number
+  error?: string
+}
+
+type ProcessingMeta = {
+  provider: "openai" | "grok"
+  usedFileSearch: boolean
+  usedFallback: boolean
+  fallbackReason?: string
+  parsingMode: "structured_json_schema" | "json_extractor"
+  cleanup?: {
+    vectorStoreDeleted: boolean
+    vectorStoreDeleteAttempts: number
+    uploadedFileDeleted: boolean
+    uploadedFileDeleteAttempts: number
+  }
+}
+
+const JSON_EXAMPLE = {
+  company: "Acme Corp",
+  tasks: [
+    { no: "1", name: "Design", owner: "John" },
+    { no: "2", name: "Build", owner: "Sarah" },
+  ],
+}
+
 function buildPlaceholderDescriptions(placeholderList: PlaceholderInput[]) {
   return placeholderList
     .map((p) => {
@@ -51,17 +79,42 @@ IMPORTANT: Return ONLY a JSON object with placeholder names as keys and their va
  
 - For normal placeholders, provide STRING values.
 - For [ARRAY/LIST] placeholders, provide a JSON ARRAY of objects. Each object should contain the requested "Fields" if they were specified.
-- If no specific fields were specified for an array, create appropriate field names based on the data.
 - Do not include any other text or explanation.
  
 Example format:
-{
-  "company": "Acme Corp",
-  "tasks": [
-    { "no": "1", "name": "Design", "owner": "John" },
-    { "no": "2", "name": "Build", "owner": "Sarah" }
-  ]
-}`
+${JSON.stringify(JSON_EXAMPLE, null, 2)}`
+}
+
+function buildStructuredOutputSchema(placeholderList: PlaceholderInput[]) {
+  const properties: Record<string, unknown> = {}
+  for (const p of placeholderList) {
+    if (p.isLoop) {
+      const fields = p.fields ?? []
+      if (fields.length === 0) {
+        throw new Error(`Strict schema 생성 실패: 루프 "${p.key}" 필드가 비어있습니다.`)
+      }
+
+      const itemProperties = Object.fromEntries(fields.map((field) => [field, { type: "string" }]))
+      properties[p.key] = {
+        type: "array",
+        items: {
+          type: "object",
+          properties: itemProperties,
+          required: fields,
+          additionalProperties: false,
+        },
+      }
+    } else {
+      properties[p.key] = { type: "string" }
+    }
+  }
+
+  return {
+    type: "object",
+    properties,
+    required: placeholderList.map((p) => p.key),
+    additionalProperties: false,
+  } as const
 }
 
 function extractFileSearchEvidence(response: OpenAI.Responses.Response): FileSearchEvidence[] {
@@ -82,6 +135,93 @@ function extractFileSearchEvidence(response: OpenAI.Responses.Response): FileSea
     }
   }
   return evidence
+}
+
+function extractJsonObject(text: string) {
+  const trimmed = text.trim()
+
+  try {
+    return JSON.parse(trimmed)
+  } catch {
+    // Ignore and try object boundary extraction below.
+  }
+
+  let start = -1
+  let depth = 0
+  let inString = false
+  let escaped = false
+
+  for (let i = 0; i < trimmed.length; i++) {
+    const ch = trimmed[i]
+
+    if (inString) {
+      if (escaped) {
+        escaped = false
+      } else if (ch === "\\") {
+        escaped = true
+      } else if (ch === '"') {
+        inString = false
+      }
+      continue
+    }
+
+    if (ch === '"') {
+      inString = true
+      continue
+    }
+
+    if (ch === "{") {
+      if (start === -1) start = i
+      depth += 1
+      continue
+    }
+
+    if (ch === "}") {
+      depth -= 1
+      if (depth === 0 && start !== -1) {
+        const candidate = trimmed.slice(start, i + 1)
+        return JSON.parse(candidate)
+      }
+    }
+  }
+
+  throw new Error("Failed to parse AI response as JSON")
+}
+
+function normalizeFilledData(filledData: Record<string, any>) {
+  const normalizedData: Record<string, any> = {}
+  for (const [key, value] of Object.entries(filledData)) {
+    const normalizedKey = key.replace(/^\{\{|\}\}$|^\#|\/$/g, "")
+    normalizedData[normalizedKey] = value
+  }
+  return normalizedData
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function retryWithBackoff(action: () => Promise<void>, label: string): Promise<DeleteRetryResult> {
+  const delays = [0, 300, 900]
+
+  for (let i = 0; i < delays.length; i++) {
+    if (delays[i] > 0) {
+      await sleep(delays[i])
+    }
+
+    try {
+      await action()
+      return { ok: true, attempts: i + 1 }
+    } catch (error: any) {
+      if (i === delays.length - 1) {
+        const errorMessage = error instanceof Error ? error.message : String(error)
+        console.error(`[v0] ${label} cleanup 실패:`, error)
+        return { ok: false, attempts: i + 1, error: errorMessage }
+      }
+    }
+  }
+
+  return { ok: false, attempts: delays.length, error: "Unknown cleanup error" }
 }
 
 export async function POST(req: NextRequest) {
@@ -116,15 +256,21 @@ export async function POST(req: NextRequest) {
       openaiClient = new OpenAI({ apiKey })
     } else {
       const xai = createXai({ apiKey })
-      // Grok 빠른 non-reasoning 모델
       model = xai("grok-4-fast-non-reasoning")
     }
 
     const placeholderList = placeholders as PlaceholderInput[]
     const placeholderDescriptions = buildPlaceholderDescriptions(placeholderList)
+    const outputSchema = buildStructuredOutputSchema(placeholderList)
 
     let fullText = ""
     let evidence: FileSearchEvidence[] = []
+    const processing: ProcessingMeta = {
+      provider,
+      usedFileSearch: false,
+      usedFallback: false,
+      parsingMode: provider === "openai" ? "structured_json_schema" : "json_extractor",
+    }
 
     if (openaiClient) {
       const prompt = buildPrompt({ placeholderDescriptions, withInlineContent: false })
@@ -142,7 +288,6 @@ export async function POST(req: NextRequest) {
         })
         uploadedFileId = uploaded.id
 
-        // NOTE: SDK type currently supports "days" granularity. We additionally clean up right away.
         const vectorStore = await openaiClient.vectorStores.create({
           name: `repgen-${Date.now()}`,
           expires_after: { anchor: "last_active_at", days: 1 },
@@ -157,6 +302,14 @@ export async function POST(req: NextRequest) {
           model: "gpt-5.2",
           input: prompt,
           include: ["file_search_call.results"],
+          text: {
+            format: {
+              type: "json_schema",
+              name: "filled_placeholders",
+              strict: true,
+              schema: outputSchema,
+            },
+          },
           tools: [
             {
               type: "file_search",
@@ -170,40 +323,50 @@ export async function POST(req: NextRequest) {
         })
         fullText = result.output_text
         evidence = extractFileSearchEvidence(result)
+        processing.usedFileSearch = true
       } catch (fileSearchError: any) {
+        processing.usedFallback = true
+        processing.fallbackReason = fileSearchError?.message || "file_search_failed"
         console.error("[v0] file_search 실패, inline prompt fallback 실행:", fileSearchError)
 
-        // Fallback: file_search 실패 시 기존 inline 방식으로 1회 재시도
         const fallbackPrompt = buildPrompt({
           placeholderDescriptions,
           dataContent,
           withInlineContent: true,
         })
+
         const fallbackResult = await openaiClient.responses.create({
           model: "gpt-5.2",
           input: fallbackPrompt,
+          text: {
+            format: {
+              type: "json_schema",
+              name: "filled_placeholders_fallback",
+              strict: true,
+              schema: outputSchema,
+            },
+          },
           reasoning: { effort: "medium" },
           max_output_tokens: 16000,
         })
         fullText = fallbackResult.output_text
       } finally {
-        if (vectorStoreId) {
-          try {
-            await openaiClient.vectorStores.del(vectorStoreId)
-          } catch (cleanupError) {
-            console.error("[v0] vector store cleanup 실패:", cleanupError)
-          }
-        }
-        if (uploadedFileId) {
-          try {
-            await openaiClient.files.del(uploadedFileId)
-          } catch (cleanupError) {
-            console.error("[v0] uploaded file cleanup 실패:", cleanupError)
-          }
+        const vectorStoreCleanup = vectorStoreId
+          ? await retryWithBackoff(() => openaiClient.vectorStores.del(vectorStoreId as string).then(() => undefined), "vector store")
+          : { ok: true, attempts: 0 }
+
+        const uploadedFileCleanup = uploadedFileId
+          ? await retryWithBackoff(() => openaiClient.files.del(uploadedFileId as string).then(() => undefined), "uploaded file")
+          : { ok: true, attempts: 0 }
+
+        processing.cleanup = {
+          vectorStoreDeleted: vectorStoreCleanup.ok,
+          vectorStoreDeleteAttempts: vectorStoreCleanup.attempts,
+          uploadedFileDeleted: uploadedFileCleanup.ok,
+          uploadedFileDeleteAttempts: uploadedFileCleanup.attempts,
         }
       }
     } else {
-      // Grok - 기존 AI SDK 사용
       const prompt = buildPrompt({
         placeholderDescriptions,
         dataContent,
@@ -215,26 +378,13 @@ export async function POST(req: NextRequest) {
         temperature: 0.7,
       })
 
-      // Stream을 텍스트로 변환
       for await (const textPart of result.textStream) {
         fullText += textPart
       }
     }
 
-    const jsonMatch = fullText.match(/\{[\s\S]*\}/)
-    if (!jsonMatch) {
-      throw new Error("Failed to parse AI response")
-    }
-
-    const filledData = JSON.parse(jsonMatch[0])
-
-    // AI가 {{key}} 형식으로 반환했을 수 있으므로 정규화
-    const normalizedData: Record<string, any> = {}
-    for (const [key, value] of Object.entries(filledData)) {
-      // {{key}} -> key 형식으로 변환
-      const normalizedKey = key.replace(/^\{\{|\}\}$|^\#|\/$/g, '')
-      normalizedData[normalizedKey] = value
-    }
+    const filledData = extractJsonObject(fullText) as Record<string, any>
+    const normalizedData = normalizeFilledData(filledData)
 
     const filledPlaceholders = placeholderList.map((p) => {
       const value = normalizedData[p.key]
@@ -242,24 +392,23 @@ export async function POST(req: NextRequest) {
         key: p.key,
         value: value ?? (p.isLoop ? [] : ""),
         ...(p.description && { description: p.description }),
-        ...(p.isLoop && { isLoop: true, fields: p.fields })
+        ...(p.isLoop && { isLoop: true, fields: p.fields }),
       }
     })
 
     return NextResponse.json({
       filledPlaceholders,
       evidence: evidence.length > 0 ? evidence : undefined,
+      processing,
     })
   } catch (error: any) {
-    // API 키 오류 체크
-    if (error?.responseBody?.includes('Incorrect API key') || error?.responseBody?.includes('invalid_api_key')) {
+    if (error?.responseBody?.includes("Incorrect API key") || error?.responseBody?.includes("invalid_api_key")) {
       return NextResponse.json(
         { error: `API 키가 올바르지 않습니다. Settings에서 ${provider === "openai" ? "OpenAI" : "Grok"} API 키를 확인해주세요.` },
         { status: 401 },
       )
     }
 
-    // 일반 에러 메시지
     let errorMessage = "Failed to fill placeholders"
     if (error instanceof Error) {
       errorMessage = error.message
@@ -272,9 +421,6 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    return NextResponse.json(
-      { error: errorMessage },
-      { status: error?.statusCode || 500 },
-    )
+    return NextResponse.json({ error: errorMessage }, { status: error?.statusCode || 500 })
   }
 }

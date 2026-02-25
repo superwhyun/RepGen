@@ -2,16 +2,18 @@
 
 import type React from "react"
 
-import { useState, useCallback } from "react"
+import { useState, useCallback, useRef } from "react"
 import { Upload, Loader2, File, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
-import type { Placeholder } from "@/app/page"
+import type { Placeholder, AIFillEvidence, FillProcessingMeta } from "@/app/page"
 
 type Props = {
   placeholders: Placeholder[]
   onDataUploaded: () => void
-  onContentGenerated: (placeholders: Placeholder[]) => void
+  onContentGenerated: (
+    placeholders: Placeholder[],
+    options?: { evidence?: AIFillEvidence[]; processing?: FillProcessingMeta }
+  ) => void
 }
 
 type UploadedFile = {
@@ -23,6 +25,9 @@ export function DataUpload({ placeholders, onDataUploaded, onContentGenerated }:
   const [isProcessing, setIsProcessing] = useState(false)
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([])
   const [isDragging, setIsDragging] = useState(false)
+  const [processingStatus, setProcessingStatus] = useState("")
+  const [lastProcessing, setLastProcessing] = useState<FillProcessingMeta | null>(null)
+  const statusTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const extractTextFromFile = async (file: File): Promise<string> => {
     try {
@@ -179,6 +184,7 @@ export function DataUpload({ placeholders, onDataUploaded, onContentGenerated }:
     }
 
     setIsProcessing(true)
+    setProcessingStatus("파일 내용을 정리하는 중...")
     try {
       // 모든 파일의 내용을 하나로 합침
       const combinedContent = uploadedFiles
@@ -189,6 +195,29 @@ export function DataUpload({ placeholders, onDataUploaded, onContentGenerated }:
       const { defaultProvider, openaiApiKey, grokApiKey } = settings
         ? JSON.parse(settings)
         : { defaultProvider: "openai", openaiApiKey: "", grokApiKey: "" }
+
+      const openaiStages = [
+        "OpenAI에 파일 업로드 중...",
+        "벡터 스토어 인덱싱 중...",
+        "file_search로 관련 근거를 찾는 중...",
+        "AI가 플레이스홀더를 채우는 중...",
+        "결과를 정리하는 중...",
+      ]
+      const grokStages = [
+        "입력 텍스트를 분석하는 중...",
+        "AI가 플레이스홀더를 채우는 중...",
+        "결과를 정리하는 중...",
+      ]
+      const stages = defaultProvider === "openai" ? openaiStages : grokStages
+      let stageIdx = 0
+
+      if (statusTimerRef.current) {
+        clearInterval(statusTimerRef.current)
+      }
+      statusTimerRef.current = setInterval(() => {
+        stageIdx = Math.min(stageIdx + 1, stages.length - 1)
+        setProcessingStatus(stages[stageIdx])
+      }, 2400)
 
       const response = await fetch("/api/fill-placeholders", {
         method: "POST",
@@ -206,12 +235,18 @@ export function DataUpload({ placeholders, onDataUploaded, onContentGenerated }:
         throw new Error(error.error || "Failed to fill placeholders")
       }
 
-      const { filledPlaceholders } = await response.json()
-      onContentGenerated(filledPlaceholders)
+      const { filledPlaceholders, evidence, processing } = await response.json()
+      setLastProcessing(processing ?? null)
+      onContentGenerated(filledPlaceholders, { evidence, processing })
     } catch (error) {
       alert(error instanceof Error ? error.message : "Error processing data file")
     } finally {
+      if (statusTimerRef.current) {
+        clearInterval(statusTimerRef.current)
+        statusTimerRef.current = null
+      }
       setIsProcessing(false)
+      setProcessingStatus("")
     }
   }, [uploadedFiles, placeholders, onContentGenerated])
 
@@ -307,7 +342,7 @@ export function DataUpload({ placeholders, onDataUploaded, onContentGenerated }:
           {isProcessing ? (
             <>
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              AI 처리 중...
+              AI 처리 중
             </>
           ) : (
             <>
@@ -316,6 +351,16 @@ export function DataUpload({ placeholders, onDataUploaded, onContentGenerated }:
           )}
         </Button>
       </div>
+      {isProcessing && processingStatus && (
+        <p className="mt-3 text-sm text-muted-foreground">{processingStatus}</p>
+      )}
+      {!isProcessing && lastProcessing && (
+        <p className="mt-3 text-xs text-muted-foreground">
+          마지막 실행: {lastProcessing.provider.toUpperCase()} | file_search{" "}
+          {lastProcessing.usedFileSearch ? "사용" : "미사용"} | fallback{" "}
+          {lastProcessing.usedFallback ? "발생" : "없음"}
+        </p>
+      )}
     </div>
   )
 }

@@ -19,6 +19,27 @@ export type Placeholder = {
 }
 
 export type AIProvider = "openai" | "grok"
+export type AIFillEvidence = {
+  toolCallId: string
+  queries: string[]
+  fileId: string | null
+  filename: string | null
+  score: number | null
+  text: string
+}
+export type FillProcessingMeta = {
+  provider: "openai" | "grok"
+  usedFileSearch: boolean
+  usedFallback: boolean
+  fallbackReason?: string
+  parsingMode: "structured_json_schema" | "json_extractor"
+  cleanup?: {
+    vectorStoreDeleted: boolean
+    vectorStoreDeleteAttempts: number
+    uploadedFileDeleted: boolean
+    uploadedFileDeleteAttempts: number
+  }
+}
 
 export default function Home() {
   const [step, setStep] = useState<"upload" | "placeholders" | "data" | "edit" | "download">("upload")
@@ -27,6 +48,8 @@ export default function Home() {
   const [placeholders, setPlaceholders] = useState<Placeholder[]>([])
   const [isProcessing, setIsProcessing] = useState(false)
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null)
+  const [analysisEvidence, setAnalysisEvidence] = useState<AIFillEvidence[]>([])
+  const [analysisProcessing, setAnalysisProcessing] = useState<FillProcessingMeta | null>(null)
 
   useEffect(() => {
     return () => {
@@ -47,6 +70,8 @@ export default function Home() {
       ...(p.description && { description: p.description }),
       ...(p.isLoop && { isLoop: true, fields: p.fields })
     })))
+    setAnalysisEvidence([])
+    setAnalysisProcessing(null)
     setStep("placeholders")
   }
 
@@ -54,8 +79,13 @@ export default function Home() {
     setStep("edit")
   }
 
-  const handleContentGenerated = (generatedPlaceholders: Placeholder[]) => {
+  const handleContentGenerated = (
+    generatedPlaceholders: Placeholder[],
+    options?: { evidence?: AIFillEvidence[]; processing?: FillProcessingMeta }
+  ) => {
     setPlaceholders(generatedPlaceholders)
+    setAnalysisEvidence(options?.evidence ?? [])
+    setAnalysisProcessing(options?.processing ?? null)
     setStep("edit")
   }
 
@@ -179,6 +209,8 @@ export default function Home() {
     setTemplateContent(null)
     setPlaceholders([])
     setDownloadUrl(null)
+    setAnalysisEvidence([])
+    setAnalysisProcessing(null)
   }
 
   return (
@@ -261,12 +293,48 @@ export default function Home() {
           )}
 
           {step === "edit" && (
-            <ContentEditor
-              placeholders={placeholders}
-              onPlaceholdersChange={setPlaceholders}
-              onComplete={handleEditComplete}
-              isProcessing={isProcessing}
-            />
+            <div className="space-y-4">
+              {analysisProcessing && (
+                <div className="rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+                  <p>
+                    분석 엔진: {analysisProcessing.provider.toUpperCase()} | file_search:{" "}
+                    {analysisProcessing.usedFileSearch ? "사용" : "미사용"} | fallback:{" "}
+                    {analysisProcessing.usedFallback ? "발생" : "없음"}
+                  </p>
+                  {analysisProcessing.fallbackReason && (
+                    <p className="mt-1">fallback 사유: {analysisProcessing.fallbackReason}</p>
+                  )}
+                </div>
+              )}
+
+              {analysisEvidence.length > 0 && (
+                <details className="rounded-lg border border-border bg-muted/20 p-3 text-xs text-muted-foreground">
+                  <summary className="cursor-pointer font-medium text-foreground">
+                    근거 보기 ({analysisEvidence.length}개)
+                  </summary>
+                  <div className="mt-3 space-y-3">
+                    {analysisEvidence.slice(0, 5).map((item, idx) => (
+                      <div key={`${item.toolCallId}-${idx}`} className="rounded border border-border bg-background p-2">
+                        <p>
+                          파일: {item.filename ?? "unknown"} | score:{" "}
+                          {item.score !== null ? item.score.toFixed(3) : "-"}
+                        </p>
+                        <p className="mt-1 whitespace-pre-wrap break-words text-muted-foreground/90">
+                          {item.text.slice(0, 320)}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              )}
+
+              <ContentEditor
+                placeholders={placeholders}
+                onPlaceholdersChange={setPlaceholders}
+                onComplete={handleEditComplete}
+                isProcessing={isProcessing}
+              />
+            </div>
           )}
 
           {step === "download" && downloadUrl && (

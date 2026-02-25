@@ -36,7 +36,8 @@ export function TemplateUpload({ onTemplateUploaded }: Props) {
 
         if (!response.ok) {
           const errorMsg = data.error || "템플릿 파일 처리 실패"
-          alert(`템플릿 처리 중 오류가 발생했습니다:\n\n${errorMsg}\n\n문서에 중복된 {{{{ 또는 잘못된 플레이스홀더 형식이 있는지 확인해주세요.`)
+          const validationDetails = Array.isArray(data.validations) ? `\n\n${data.validations.join("\n")}` : ""
+          alert(`템플릿 처리 중 오류가 발생했습니다:\n\n${errorMsg}${validationDetails}\n\n문서에 중복된 {{{{ 또는 잘못된 플레이스홀더 형식이 있는지 확인해주세요.`)
           return
         }
 

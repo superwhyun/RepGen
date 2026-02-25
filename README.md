@@ -89,10 +89,20 @@ OpenAI 선택 시, 긴 텍스트를 프롬프트에 그대로 넣지 않고 아�
 4. GPT-5가 검색 결과를 바탕으로 플레이스홀더 채움
 5. 처리 후 업로드 파일/벡터 스토어 즉시 정리(cleanup)
 
-`/api/fill-placeholders` 응답에는 `filledPlaceholders` 외에 `evidence`(검색된 근거 텍스트 목록)가 포함될 수 있습니다.
+추가 동작:
+- OpenAI 경로는 JSON Schema 기반 구조화 출력으로 파싱 안정성을 높입니다.
+- `file_search` 실패 시 기존 inline 프롬프트 방식으로 1회 fallback 합니다.
+- cleanup은 재시도(backoff) 로직으로 안정성을 높였습니다.
+
+`/api/fill-placeholders` 응답에는 다음 필드가 포함될 수 있습니다.
+- `filledPlaceholders`: 최종 채워진 값
+- `evidence`: `file_search`가 찾은 근거 텍스트 목록
+- `processing`: `usedFallback`, `fallbackReason`, `cleanup` 상태 등 실행 메타데이터
 
 #### Step 4: 내용 편집
 - AI가 자동으로 생성한 내용 확인
+- 분석 메타 정보(file_search 사용 여부, fallback 여부) 확인
+- 필요하면 근거 보기에서 검색된 텍스트 샘플 확인
 - 필요시 각 항목을 직접 수정
 - **Generate Document** 클릭
 

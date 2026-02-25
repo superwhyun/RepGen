@@ -39,6 +39,7 @@ export async function POST(req: NextRequest) {
 
     // key를 기준으로 중복 제거하고 description 보존
     const placeholderMap = new Map<string, { key: string; description?: string; isLoop?: boolean; fields?: string[] }>()
+    const parseErrors: string[] = []
 
     // 현재 활성화된 루프 추적
     const activeLoops = new Set<string>()
@@ -67,7 +68,13 @@ export async function POST(req: NextRequest) {
       }
       // 3. 점(.) 문법 처리 (예: tasks.name)
       else if (rawKey.includes('.')) {
-        const [parent, child] = rawKey.split('.')
+        const [parent, ...childParts] = rawKey.split('.')
+        const child = childParts.join('.')
+
+        if (!parent || !child) {
+          parseErrors.push(`점 문법 오류: {{${rawKey}}} 형식이 올바르지 않습니다. 예: {{tasks.name}}`)
+          continue
+        }
 
         if (!placeholderMap.has(parent)) {
           placeholderMap.set(parent, {
@@ -121,15 +128,35 @@ export async function POST(req: NextRequest) {
 
     loopStarts.forEach(key => {
       if (!loopEnds.includes(key)) {
-        warnings.push(`루프 태그 경고: {{#${key}}}에 대응하는 {{/${key}}}가 없습니다.`)
+        parseErrors.push(`루프 태그 오류: {{#${key}}}에 대응하는 {{/${key}}}가 없습니다.`)
       }
     })
 
     loopEnds.forEach(key => {
       if (!loopStarts.includes(key)) {
-        warnings.push(`루프 태그 경고: {{/${key}}}에 대응하는 {{#${key}}}가 없습니다.`)
+        parseErrors.push(`루프 태그 오류: {{/${key}}}에 대응하는 {{#${key}}}가 없습니다.`)
       }
     })
+
+    // strict schema를 위해 루프 필드는 최소 1개 이상의 자식 필드가 필요
+    placeholders.forEach((p) => {
+      if (p.isLoop && (!p.fields || p.fields.length === 0)) {
+        parseErrors.push(
+          `루프 필드 오류: "${p.key}" 루프에서 필드를 찾지 못했습니다. 예: {{#${p.key}}}{{name}}{{/${p.key}}} 또는 {{${p.key}.name}}`
+        )
+      }
+    })
+
+    if (parseErrors.length > 0) {
+      return NextResponse.json(
+        {
+          error: "템플릿 문법 검증 실패",
+          validations: parseErrors,
+          warnings: warnings.length > 0 ? warnings : undefined,
+        },
+        { status: 400 }
+      )
+    }
 
     return NextResponse.json({
       placeholders,
