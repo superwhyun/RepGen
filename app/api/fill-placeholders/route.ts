@@ -1,11 +1,95 @@
 import { type NextRequest, NextResponse } from "next/server"
-import OpenAI from "openai"
+import OpenAI, { toFile } from "openai"
 import { createXai } from "@ai-sdk/xai"
 import { streamText } from "ai"
 
+type PlaceholderInput = { key: string; description?: string; isLoop?: boolean; fields?: string[] }
+type FileSearchEvidence = {
+  toolCallId: string
+  queries: string[]
+  fileId: string | null
+  filename: string | null
+  score: number | null
+  text: string
+}
+
+function buildPlaceholderDescriptions(placeholderList: PlaceholderInput[]) {
+  return placeholderList
+    .map((p) => {
+      if (p.isLoop) {
+        const fieldsStr = p.fields && p.fields.length > 0 ? ` (Fields: ${p.fields.join(", ")})` : ""
+        const prefix = `- {{#${p.key}}} [ARRAY/LIST]${fieldsStr}`
+        return p.description ? `${prefix} : ${p.description}` : prefix
+      }
+
+      const prefix = `- {{${p.key}}}`
+      return p.description ? `${prefix} : ${p.description}` : prefix
+    })
+    .join("\n")
+}
+
+function buildPrompt({
+  placeholderDescriptions,
+  dataContent,
+  withInlineContent,
+}: {
+  placeholderDescriptions: string
+  dataContent?: string
+  withInlineContent: boolean
+}) {
+  const dataSection = withInlineContent
+    ? `\nHere is the data content:\n${dataContent ?? ""}\n`
+    : "\nUse file_search tool results as the source of truth for filling placeholders.\n"
+
+  return `You are a document filling assistant. I have a document with the following placeholders that need to be filled:
+ 
+${placeholderDescriptions}
+${dataSection}
+Please analyze the source data and provide appropriate values for each placeholder. If a placeholder has a description (after the colon), follow those instructions carefully when generating the value.
+ 
+IMPORTANT: Return ONLY a JSON object with placeholder names as keys and their values.
+ 
+- For normal placeholders, provide STRING values.
+- For [ARRAY/LIST] placeholders, provide a JSON ARRAY of objects. Each object should contain the requested "Fields" if they were specified.
+- If no specific fields were specified for an array, create appropriate field names based on the data.
+- Do not include any other text or explanation.
+ 
+Example format:
+{
+  "company": "Acme Corp",
+  "tasks": [
+    { "no": "1", "name": "Design", "owner": "John" },
+    { "no": "2", "name": "Build", "owner": "Sarah" }
+  ]
+}`
+}
+
+function extractFileSearchEvidence(response: OpenAI.Responses.Response): FileSearchEvidence[] {
+  const evidence: FileSearchEvidence[] = []
+  for (const item of response.output) {
+    if (item.type !== "file_search_call") continue
+
+    for (const result of item.results ?? []) {
+      if (!result.text) continue
+      evidence.push({
+        toolCallId: item.id,
+        queries: item.queries ?? [],
+        fileId: result.file_id ?? null,
+        filename: result.filename ?? null,
+        score: typeof result.score === "number" ? result.score : null,
+        text: result.text,
+      })
+    }
+  }
+  return evidence
+}
+
 export async function POST(req: NextRequest) {
+  let provider: "openai" | "grok" = "openai"
+
   try {
-    const { dataContent, placeholders, provider, apiKey } = await req.json()
+    const { dataContent, placeholders, provider: requestProvider, apiKey } = await req.json()
+    provider = requestProvider === "grok" ? "grok" : "openai"
 
     if (!apiKey) {
       return NextResponse.json(
@@ -13,79 +97,118 @@ export async function POST(req: NextRequest) {
         { status: 400 },
       )
     }
+    if (typeof dataContent !== "string" || dataContent.trim().length === 0) {
+      return NextResponse.json(
+        { error: "데이터 파일 내용이 비어있습니다. 최소 1개 이상의 유효한 파일을 업로드해주세요." },
+        { status: 400 },
+      )
+    }
+    if (!Array.isArray(placeholders)) {
+      return NextResponse.json(
+        { error: "플레이스홀더 형식이 올바르지 않습니다." },
+        { status: 400 },
+      )
+    }
 
     let model
-    let useResponsesAPI = false
+    let openaiClient: OpenAI | null = null
     if (provider === "openai") {
-      // OpenAI GPT-5 - Responses API 사용
-      useResponsesAPI = true
-      model = new OpenAI({ apiKey })
+      openaiClient = new OpenAI({ apiKey })
     } else {
-      const xai = createXai({
-        apiKey,
-        timeout: 120000,
-      })
+      const xai = createXai({ apiKey })
       // Grok 빠른 non-reasoning 모델
       model = xai("grok-4-fast-non-reasoning")
     }
 
-    // placeholders는 이제 {key, description, isLoop, fields} 객체 배열
-    type PlaceholderInput = { key: string; description?: string; isLoop?: boolean; fields?: string[] }
     const placeholderList = placeholders as PlaceholderInput[]
-
-    // description이 있는 경우 프롬프트에 반영, 루프 태그 및 필드 정보 표시
-    const placeholderDescriptions = placeholderList
-      .map((p) => {
-        if (p.isLoop) {
-          const fieldsStr = p.fields && p.fields.length > 0 ? ` (Fields: ${p.fields.join(', ')})` : ''
-          const prefix = `- {{#${p.key}}} [ARRAY/LIST]${fieldsStr}`
-          return p.description ? `${prefix} : ${p.description}` : prefix
-        }
-
-        const prefix = `- {{${p.key}}}`
-        return p.description ? `${prefix} : ${p.description}` : prefix
-      })
-      .join("\n")
-
-    const prompt = `You are a document filling assistant. I have a document with the following placeholders that need to be filled:
- 
- ${placeholderDescriptions}
- 
- Here is the data content:
- ${dataContent}
- 
- Please analyze the data content and provide appropriate values for each placeholder. If a placeholder has a description (after the colon), follow those instructions carefully when generating the value. 
- 
- IMPORTANT: Return ONLY a JSON object with placeholder names as keys and their values. 
- 
- - For normal placeholders, provide STRING values.
- - For [ARRAY/LIST] placeholders, provide a JSON ARRAY of objects. Each object should contain the requested "Fields" if they were specified.
- - If no specific fields were specified for an array, create appropriate field names based on the data.
- - Do not include any other text or explanation.
- 
- Example format:
- {
-   "company": "Acme Corp",
-   "tasks": [
-     { "no": "1", "name": "Design", "owner": "John" },
-     { "no": "2", "name": "Build", "owner": "Sarah" }
-   ]
- }`
+    const placeholderDescriptions = buildPlaceholderDescriptions(placeholderList)
 
     let fullText = ""
+    let evidence: FileSearchEvidence[] = []
 
-    if (useResponsesAPI) {
-      // OpenAI GPT-5 - Responses API 사용
-      const result = await (model as OpenAI).responses.create({
-        model: "gpt-5.2",
-        input: prompt,
-        reasoning: { effort: "medium" },  // 문서 분석 및 요약에 적합한 추론 수준
-        // 긴 문서 및 많은 placeholder 처리를 위한 충분한 출력 토큰 (최대 16K)
-        max_output_tokens: 16000
-      })
-      fullText = result.output_text
+    if (openaiClient) {
+      const prompt = buildPrompt({ placeholderDescriptions, withInlineContent: false })
+      let uploadedFileId: string | null = null
+      let vectorStoreId: string | null = null
+
+      try {
+        const file = await toFile(Buffer.from(dataContent, "utf-8"), `repgen-${Date.now()}.txt`, {
+          type: "text/plain",
+        })
+
+        const uploaded = await openaiClient.files.create({
+          file,
+          purpose: "assistants",
+        })
+        uploadedFileId = uploaded.id
+
+        // NOTE: SDK type currently supports "days" granularity. We additionally clean up right away.
+        const vectorStore = await openaiClient.vectorStores.create({
+          name: `repgen-${Date.now()}`,
+          expires_after: { anchor: "last_active_at", days: 1 },
+        })
+        vectorStoreId = vectorStore.id
+
+        await openaiClient.vectorStores.fileBatches.createAndPoll(vectorStoreId, {
+          file_ids: [uploadedFileId],
+        })
+
+        const result = await openaiClient.responses.create({
+          model: "gpt-5.2",
+          input: prompt,
+          include: ["file_search_call.results"],
+          tools: [
+            {
+              type: "file_search",
+              vector_store_ids: [vectorStoreId],
+              max_num_results: 20,
+            },
+          ],
+          tool_choice: "required",
+          reasoning: { effort: "medium" },
+          max_output_tokens: 16000,
+        })
+        fullText = result.output_text
+        evidence = extractFileSearchEvidence(result)
+      } catch (fileSearchError: any) {
+        console.error("[v0] file_search 실패, inline prompt fallback 실행:", fileSearchError)
+
+        // Fallback: file_search 실패 시 기존 inline 방식으로 1회 재시도
+        const fallbackPrompt = buildPrompt({
+          placeholderDescriptions,
+          dataContent,
+          withInlineContent: true,
+        })
+        const fallbackResult = await openaiClient.responses.create({
+          model: "gpt-5.2",
+          input: fallbackPrompt,
+          reasoning: { effort: "medium" },
+          max_output_tokens: 16000,
+        })
+        fullText = fallbackResult.output_text
+      } finally {
+        if (vectorStoreId) {
+          try {
+            await openaiClient.vectorStores.del(vectorStoreId)
+          } catch (cleanupError) {
+            console.error("[v0] vector store cleanup 실패:", cleanupError)
+          }
+        }
+        if (uploadedFileId) {
+          try {
+            await openaiClient.files.del(uploadedFileId)
+          } catch (cleanupError) {
+            console.error("[v0] uploaded file cleanup 실패:", cleanupError)
+          }
+        }
+      }
     } else {
       // Grok - 기존 AI SDK 사용
+      const prompt = buildPrompt({
+        placeholderDescriptions,
+        dataContent,
+        withInlineContent: true,
+      })
       const result = await streamText({
         model: model as any,
         prompt,
@@ -113,19 +236,20 @@ export async function POST(req: NextRequest) {
       normalizedData[normalizedKey] = value
     }
 
-    console.log("[v0] 정규화된 데이터:", normalizedData)
-
     const filledPlaceholders = placeholderList.map((p) => {
       const value = normalizedData[p.key]
       return {
         key: p.key,
-        value: value || (p.isLoop ? [] : ""),
+        value: value ?? (p.isLoop ? [] : ""),
         ...(p.description && { description: p.description }),
         ...(p.isLoop && { isLoop: true, fields: p.fields })
       }
     })
 
-    return NextResponse.json({ filledPlaceholders })
+    return NextResponse.json({
+      filledPlaceholders,
+      evidence: evidence.length > 0 ? evidence : undefined,
+    })
   } catch (error: any) {
     // API 키 오류 체크
     if (error?.responseBody?.includes('Incorrect API key') || error?.responseBody?.includes('invalid_api_key')) {

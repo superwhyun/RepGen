@@ -116,7 +116,7 @@ export function SettingsDialog() {
               <p className="text-xs text-destructive">⚠️ OpenAI API 키는 'sk-'로 시작해야 합니다</p>
             )}
             <p className="text-xs text-muted-foreground">
-              모델: <span className="font-mono font-semibold">gpt-5</span> (Responses API, reasoning: low) | 발급: platform.openai.com/api-keys
+              모델: <span className="font-mono font-semibold">gpt-5.2</span> (Responses API, reasoning: low) | 발급: platform.openai.com/api-keys
             </p>
           </div>
           <div className="space-y-2">

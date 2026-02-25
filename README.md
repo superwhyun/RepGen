@@ -6,6 +6,7 @@ Word 템플릿의 플레이스홀더를 AI가 자동으로 채워주는 Next.js 
 
 - **스마트 플레이스홀더**: `{{keyword}}` 또는 `{{keyword:작성지침}}` 형식 지원
 - **AI 자동 채우기**: OpenAI GPT-5 또는 xAI Grok-4-Fast로 내용 자동 생성
+- **OpenAI 파일 검색 기반 처리**: 긴 입력은 `file_search`로 관련 근거를 검색해 채움
 - **다중 파일 업로드**: 여러 참고 문서를 한 번에 업로드 (Drag & Drop 지원)
 - **Word 파일 지원**: .docx 파일에서 텍스트 자동 추출
 - **실시간 편집**: AI가 생성한 내용을 바로 수정 가능
@@ -70,13 +71,25 @@ Word 문서에 플레이스홀더를 작성합니다:
 #### Step 3: 참고 자료 업로드
 - 데이터 파일을 업로드 (여러 파일 선택 가능)
   - 텍스트 파일: .txt, .md
-  - Word 문서: .docx, .doc
+  - Word 문서: .docx
   - PDF 문서: .pdf
 - 파일을 드래그 앤 드롭으로 추가
 - 업로드된 파일 목록 확인
 - **AI로 자동 채우기** 클릭
 
 > 💡 **Tip**: Word 및 PDF 파일을 업로드하면 자동으로 텍스트를 추출하여 AI에 전달합니다.
+
+### OpenAI 처리 방식 (현재 구현)
+
+OpenAI 선택 시, 긴 텍스트를 프롬프트에 그대로 넣지 않고 아래 순서로 처리합니다.
+
+1. 추출된 텍스트를 임시 파일로 업로드
+2. 벡터 스토어 생성 및 인덱싱
+3. `file_search`로 관련 근거 검색
+4. GPT-5가 검색 결과를 바탕으로 플레이스홀더 채움
+5. 처리 후 업로드 파일/벡터 스토어 즉시 정리(cleanup)
+
+`/api/fill-placeholders` 응답에는 `filledPlaceholders` 외에 `evidence`(검색된 근거 텍스트 목록)가 포함될 수 있습니다.
 
 #### Step 4: 내용 편집
 - AI가 자동으로 생성한 내용 확인
@@ -191,7 +204,7 @@ RepGen/
 ### OpenAI API Key
 - 발급: https://platform.openai.com/api-keys
 - 형식: `sk-`로 시작
-- 모델: `gpt-5` (Responses API 사용)
+- 모델: `gpt-5.2` (Responses API 사용)
 
 ### Grok API Key
 - 발급: https://console.x.ai
@@ -213,7 +226,7 @@ Incorrect API key provided
 ```
 Failed to extract text from Word document
 ```
-- .docx 형식인지 확인 (.doc은 지원하지 않을 수 있음)
+- .docx 형식인지 확인 (.doc 형식은 지원하지 않음)
 - 파일이 암호화되지 않았는지 확인
 
 ### Duplicate open tag 오류

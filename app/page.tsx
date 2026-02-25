@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { Upload, FileText, Download, Sparkles } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
@@ -27,6 +27,14 @@ export default function Home() {
   const [placeholders, setPlaceholders] = useState<Placeholder[]>([])
   const [isProcessing, setIsProcessing] = useState(false)
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (downloadUrl) {
+        URL.revokeObjectURL(downloadUrl)
+      }
+    }
+  }, [downloadUrl])
 
   const handleTemplateUploaded = (file: File, content: ArrayBuffer, extractedPlaceholders: any[]) => {
     setTemplateFile(file)
@@ -80,7 +88,9 @@ export default function Home() {
             let converted = fullMatch.replace(new RegExp(`\\{\\{${parentName}\\.`, 'g'), '{{')
 
             // 행 시작에 {{#parent}} 추가
-            const firstTextMatch = converted.match(/<w:t[^>]*>/)
+            // NOTE: "<w:t[^>]*>" can falsely match "<w:tr...>".
+            // Match only real text nodes (<w:t ...> or <w:t>).
+            const firstTextMatch = converted.match(/<w:t(?:\s[^>]*)?>/)
             if (firstTextMatch?.index !== undefined) {
               const pos = firstTextMatch.index + firstTextMatch[0].length
               converted = converted.slice(0, pos) + `{{#${parentName}}}` + converted.slice(pos)
