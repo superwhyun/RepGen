@@ -35,3 +35,8 @@
 - shadcn/ui (new-york 스타일) + Radix UI + Tailwind CSS 기반
 - 조건부 클래스는 `@/lib/utils`의 `cn()` 유틸리티 사용
 - 아이콘은 Lucide React 사용
+
+## Skills
+- `filldoc`: RepGen 템플릿+데이터 채움 기능 구현/수정/디버깅 워크플로우 스킬
+  - 경로: `/Users/whyun/workspace/SERVICE/RepGen/.skills/filldoc/SKILL.md`
+  - 트리거 예시: 템플릿 업로드/파싱, placeholder 매핑, 미리보기 생성, fill API 검증/에러 처리
