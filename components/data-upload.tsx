@@ -2,8 +2,8 @@
 
 import type React from "react"
 
-import { useState, useCallback, useRef } from "react"
-import { Upload, Loader2, File, X } from "lucide-react"
+import { useState, useCallback, useRef, useEffect } from "react"
+import { Upload, Loader2, File as FileIcon, X, ClipboardPaste } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import type { Placeholder, AIFillEvidence, FillProcessingMeta } from "@/app/page"
 
@@ -19,6 +19,8 @@ type Props = {
 type UploadedFile = {
   file: File
   content: string
+  source: "file" | "clipboard"
+  preview?: string
 }
 
 export function DataUpload({ placeholders, onDataUploaded, onContentGenerated }: Props) {
@@ -28,6 +30,76 @@ export function DataUpload({ placeholders, onDataUploaded, onContentGenerated }:
   const [processingStatus, setProcessingStatus] = useState("")
   const [lastProcessing, setLastProcessing] = useState<FillProcessingMeta | null>(null)
   const statusTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  const makePreview = useCallback((text: string) => {
+    const normalized = text.replace(/\s+/g, " ").trim()
+    if (normalized.length <= 80) return normalized
+    return `${normalized.slice(0, 80)}...`
+  }, [])
+
+  const addClipboardText = useCallback(
+    (rawText: string) => {
+      const text = rawText.trim()
+      if (!text) {
+        alert("클립보드에 붙여넣을 문자열이 없습니다.")
+        return
+      }
+
+      const now = new Date()
+      const pad = (n: number) => String(n).padStart(2, "0")
+      const fileName = `clipboard-${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}.txt`
+      const file = new File([text], fileName, { type: "text/plain" })
+      const uploadedFromClipboard: UploadedFile = {
+        file,
+        content: text,
+        source: "clipboard",
+        preview: makePreview(text),
+      }
+
+      setUploadedFiles((prev) => [...prev, uploadedFromClipboard])
+    },
+    [makePreview],
+  )
+
+  const handlePasteFromButton = useCallback(async () => {
+    try {
+      if (!navigator.clipboard?.readText) {
+        alert("이 브라우저에서는 클립보드 읽기를 지원하지 않습니다.")
+        return
+      }
+
+      const text = await navigator.clipboard.readText()
+      addClipboardText(text)
+    } catch (error) {
+      console.error("[v0] 클립보드 읽기 실패:", error)
+      alert("클립보드 문자열을 읽지 못했습니다. Ctrl+V / Cmd+V로 붙여넣기를 시도해주세요.")
+    }
+  }, [addClipboardText])
+
+  useEffect(() => {
+    const handleWindowPaste = (e: ClipboardEvent) => {
+      if (isProcessing) return
+
+      const activeElement = document.activeElement
+      if (activeElement instanceof HTMLInputElement || activeElement instanceof HTMLTextAreaElement) {
+        return
+      }
+
+      const text = e.clipboardData?.getData("text/plain") ?? ""
+      if (!text.trim()) {
+        alert("문자열만 붙여넣을 수 있습니다.")
+        return
+      }
+
+      e.preventDefault()
+      addClipboardText(text)
+    }
+
+    window.addEventListener("paste", handleWindowPaste)
+    return () => {
+      window.removeEventListener("paste", handleWindowPaste)
+    }
+  }, [addClipboardText, isProcessing])
 
   const extractTextFromFile = async (file: File): Promise<string> => {
     try {
@@ -111,7 +183,7 @@ export function DataUpload({ placeholders, onDataUploaded, onContentGenerated }:
             throw new Error("지원하지 않는 파일 형식입니다 (.txt, .md, .docx, .pdf만 지원)")
           }
 
-          newFiles.push({ file, content })
+          newFiles.push({ file, content, source: "file" })
         } catch (error) {
           const errorMessage = error instanceof Error ? error.message : "알 수 없는 오류"
           errors.push(`${file.name}: ${errorMessage}`)
@@ -282,8 +354,12 @@ export function DataUpload({ placeholders, onDataUploaded, onContentGenerated }:
             </span>
           </Button>
         </label>
+        <Button className="mt-2" variant="outline" size="sm" onClick={handlePasteFromButton} disabled={isProcessing}>
+          <ClipboardPaste className="mr-2 h-4 w-4" />
+          클립보드 붙여넣기
+        </Button>
         <p className="mt-3 text-sm text-muted-foreground">
-          지원 형식: .txt, .md, .docx, .pdf (최대 10MB, 여러 파일 선택 가능)
+          지원 형식: .txt, .md, .docx, .pdf 또는 문자열 붙여넣기 (최대 10MB, 여러 항목 추가 가능)
         </p>
         <input
           id="data-upload"
@@ -310,13 +386,16 @@ export function DataUpload({ placeholders, onDataUploaded, onContentGenerated }:
               >
                 <div className="flex items-center gap-3">
                   <div className="flex h-8 w-8 items-center justify-center rounded bg-primary/10">
-                    <File className="h-4 w-4 text-primary" />
+                    <FileIcon className="h-4 w-4 text-primary" />
                   </div>
                   <div>
                     <p className="text-sm font-medium text-foreground">{uploadedFile.file.name}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {(uploadedFile.file.size / 1024).toFixed(1)} KB
-                    </p>
+                    {uploadedFile.source === "clipboard" && uploadedFile.preview ? (
+                      <p className="max-w-[600px] truncate text-xs text-muted-foreground">
+                        {uploadedFile.preview}
+                      </p>
+                    ) : null}
+                    <p className="text-xs text-muted-foreground">{(uploadedFile.file.size / 1024).toFixed(1)} KB</p>
                   </div>
                 </div>
                 <Button
